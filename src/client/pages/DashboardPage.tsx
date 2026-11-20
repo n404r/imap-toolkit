@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type AccountSummary } from '../api'
+import { api, type AccountSummary } from '../api-client'
 
 type Stats = { today: number; this_week: number; total: number }
 

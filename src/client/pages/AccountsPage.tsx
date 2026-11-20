@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Account, type CreateAccountPayload } from '../api'
+import { api, type Account, type CreateAccountPayload } from '../api-client'
 
 const EMPTY_FORM: CreateAccountPayload = {
   label: '',

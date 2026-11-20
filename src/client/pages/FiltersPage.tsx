@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Filter, type FilterCondition } from '../api'
+import { api, type Filter, type FilterCondition } from '../api-client'
 
 type Field = FilterCondition['field']
 type MatchType = FilterCondition['match_type']

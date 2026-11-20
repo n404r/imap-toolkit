@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { api } from './api'
+import { api } from './api-client'
 import LoginPage from './pages/LoginPage'
 import Layout from './components/Layout'
 import DashboardPage from './pages/DashboardPage'

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { api, type DeletionLog } from '../api'
+import { api, type DeletionLog } from '../api-client'
 
 export default function LogsPage() {
   const [logs, setLogs] = useState<DeletionLog[]>([])

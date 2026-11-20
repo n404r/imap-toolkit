@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Page } from '../App'
-import { api } from '../api'
+import { api } from '../api-client'
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '▤' },
