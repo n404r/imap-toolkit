@@ -2,7 +2,8 @@ import crypto from 'crypto'
 import { env } from '../env.js'
 
 const ALGORITHM = 'aes-256-gcm'
-const KEY = Buffer.from(env.ENCRYPTION_KEY, 'hex')
+// Derive a fixed 32-byte key from whatever string the user provides
+const KEY = crypto.createHash('sha256').update(env.ENCRYPTION_KEY).digest()
 const IV_BYTES = 12
 const TAG_BYTES = 16
 

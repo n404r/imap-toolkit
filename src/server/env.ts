@@ -2,11 +2,9 @@ import 'dotenv/config'
 import { z } from 'zod'
 
 const envSchema = z.object({
-  ADMIN_PASSWORD: z.string().min(8, 'ADMIN_PASSWORD must be at least 8 characters'),
-  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
-  ENCRYPTION_KEY: z
-    .string()
-    .length(64, 'ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)'),
+  ADMIN_PASSWORD: z.string().min(1, 'ADMIN_PASSWORD is required'),
+  JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
+  ENCRYPTION_KEY: z.string().min(1, 'ENCRYPTION_KEY is required'),
   PORT: z.coerce.number().default(3000),
   DB_PATH: z.string().default('./data/imap-toolkit.db'),
   LOG_LEVEL: z
