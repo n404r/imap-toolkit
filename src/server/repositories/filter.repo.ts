@@ -7,7 +7,7 @@ function rowToCondition(row: Record<string, unknown>): FilterCondition {
     filter_id: Number(row['filter_id']),
     field: String(row['field']) as FilterCondition['field'],
     match_type: String(row['match_type']) as FilterCondition['match_type'],
-    values: JSON.parse(String(row['values'])) as string[],
+    values: JSON.parse(String(row['condition_values'])) as string[],
   }
 }
 
@@ -77,7 +77,7 @@ export const filterRepo = {
     const filterId = Number(r.lastInsertRowid)
     for (const c of data.conditions) {
       await db.execute({
-        sql: 'INSERT INTO filter_conditions (filter_id, field, match_type, values) VALUES (?, ?, ?, ?)',
+        sql: 'INSERT INTO filter_conditions (filter_id, field, match_type, condition_values) VALUES (?, ?, ?, ?)',
         args: [filterId, c.field, c.match_type, JSON.stringify(c.values)],
       })
     }
@@ -111,7 +111,7 @@ export const filterRepo = {
       await db.execute({ sql: 'DELETE FROM filter_conditions WHERE filter_id = ?', args: [id] })
       for (const c of data.conditions) {
         await db.execute({
-          sql: 'INSERT INTO filter_conditions (filter_id, field, match_type, values) VALUES (?, ?, ?, ?)',
+          sql: 'INSERT INTO filter_conditions (filter_id, field, match_type, condition_values) VALUES (?, ?, ?, ?)',
           args: [id, c.field, c.match_type, JSON.stringify(c.values)],
         })
       }

@@ -31,7 +31,7 @@ const MIGRATIONS: { id: number; statements: string[] }[] = [
         filter_id   INTEGER NOT NULL REFERENCES filters(id) ON DELETE CASCADE,
         field       TEXT    NOT NULL,
         match_type  TEXT    NOT NULL,
-        values      TEXT    NOT NULL,
+        condition_values TEXT NOT NULL,
         created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
       )`,
       `CREATE TABLE IF NOT EXISTS deletion_logs (
