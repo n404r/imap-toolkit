@@ -21,17 +21,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 await runMigrations()
 
-// Seed admin password if not set
+// Sync admin password from env
 const db = getDb()
-const existingAdmin = await db.execute('SELECT id FROM admin_settings WHERE id = 1')
-if (existingAdmin.rows.length === 0) {
-  const salt = generateSalt()
-  const hash = hashPassword(env.ADMIN_PASSWORD, salt)
-  await db.execute({
-    sql: 'INSERT INTO admin_settings (id, password_hash, password_salt) VALUES (1, ?, ?)',
-    args: [hash, salt],
-  })
-}
+const salt = generateSalt()
+const hash = hashPassword(env.ADMIN_PASSWORD, salt)
+await db.execute({
+  sql: `INSERT INTO admin_settings (id, password_hash, password_salt, updated_at)
+        VALUES (1, ?, ?, datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET
+          password_hash = excluded.password_hash,
+          password_salt = excluded.password_salt,
+          updated_at = excluded.updated_at`,
+  args: [hash, salt],
+})
 
 // ─── Fastify server ───────────────────────────────────────────────────────────
 

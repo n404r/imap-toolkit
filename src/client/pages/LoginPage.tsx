@@ -13,8 +13,12 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
     try {
       await api.login(password)
       onSuccess()
-    } catch {
-      setError('Invalid password')
+    } catch (err: any) {
+      if (err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError')) {
+        setError('Cannot connect to backend server. Make sure the API is running on port 3000.')
+      } else {
+        setError(err?.message || 'Invalid password')
+      }
     } finally {
       setLoading(false)
     }
