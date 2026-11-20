@@ -1,6 +1,7 @@
 {
   "name": "imap-toolkit",
   "version": "0.1.0",
+  "type": "module",
   "private": true,
   "description": "IMAP mailbox watcher that permanently deletes emails matching your filters",
   "scripts": {
@@ -19,6 +20,8 @@
     "@fastify/jwt": "^8.0.1",
     "@fastify/static": "^7.0.4",
     "@libsql/client": "^0.14.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.26.2",
     "imapflow": "^1.0.162",
@@ -26,6 +29,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
     "postcss": "^8.4.35",
