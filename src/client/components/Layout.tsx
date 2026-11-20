@@ -28,7 +28,7 @@ export default function Layout({ page, onNavigate, onLogout, children }: Props) 
       <aside className="w-52 flex-shrink-0 bg-surface border-r border-border flex flex-col">
         {/* Logo */}
         <div className="px-5 py-4 border-b border-border">
-          <span className="text-accent font-semibold tracking-tight">📬 imap-toolkit</span>
+          <span className="text-accent font-semibold tracking-tight">📬 NeMo IMAP</span>
         </div>
 
         {/* Nav */}

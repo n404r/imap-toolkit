@@ -29,7 +29,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
       <div className="card w-full max-w-sm space-y-5">
         <div>
           <div className="text-2xl mb-1">📬</div>
-          <h1 className="text-lg font-semibold">imap-toolkit</h1>
+          <h1 className="text-lg font-semibold">NeMo IMAP</h1>
           <p className="text-muted text-sm mt-1">Enter your admin password to continue</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">

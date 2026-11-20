@@ -1,4 +1,4 @@
-# IMAP Toolkit
+# NeMo IMAP
 
 > Watch IMAP mailboxes and permanently delete emails that match your filters. Runs on a VPS, managed from a web panel.
 

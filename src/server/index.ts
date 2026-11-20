@@ -233,7 +233,7 @@ if (fs.existsSync(clientDist)) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 await app.listen({ port: env.PORT, host: '0.0.0.0' })
-app.log.info(`🚀 imap-toolkit running on port ${env.PORT}`)
+app.log.info(`🚀 NeMo IMAP running on port ${env.PORT}`)
 
 const shutdown = () => {
   manager.stopAll()
