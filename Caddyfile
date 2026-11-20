@@ -1,0 +1,6 @@
+# Replace mail.example.com with your actual domain.
+# Caddy auto-provisions TLS via Let's Encrypt.
+
+mail.example.com {
+    reverse_proxy app:3000
+}

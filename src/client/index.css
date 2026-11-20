@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    @apply bg-background text-gray-100 font-mono;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-surface;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-lg p-4;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-accent hover:bg-accent-hover text-white;
+  }
+  .btn-ghost {
+    @apply btn hover:bg-border text-gray-300;
+  }
+  .btn-danger {
+    @apply btn bg-danger/10 hover:bg-danger/20 text-danger border border-danger/30;
+  }
+  .input {
+    @apply bg-background border border-border rounded px-3 py-1.5 text-sm text-gray-100 placeholder-muted outline-none focus:border-accent transition-colors w-full;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .badge-green  { @apply badge bg-success/15 text-success; }
+  .badge-red    { @apply badge bg-danger/15 text-danger; }
+  .badge-yellow { @apply badge bg-warning/15 text-warning; }
+  .badge-gray   { @apply badge bg-border text-muted; }
+  .badge-accent { @apply badge bg-accent/15 text-accent; }
+}
