@@ -6,7 +6,7 @@
   "description": "IMAP mailbox watcher that permanently deletes emails matching your filters",
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
-    "dev:all": "concurrently -n api,ui -c cyan,magenta \"npm run dev\" \"npx vite src/client\"",
+    "dev:all": "concurrently -n api,ui -c cyan,magenta \"npm run dev\" \"vite --config vite.config.ts\"",
     "build:server": "tsc -p tsconfig.server.json",
     "build:client": "vite build",
     "build": "npm run build:server && npm run build:client",

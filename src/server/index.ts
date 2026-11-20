@@ -5,6 +5,7 @@ import fastifyCookie from '@fastify/cookie'
 import fastifyCors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
 import path from 'path'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { env } from './env.js'
 import { runMigrations } from './db/migrations.js'
@@ -221,12 +222,13 @@ app.get('/api/dashboard', { onRequest: [app.authenticate] }, async () => {
 
 // ─── Serve React panel ────────────────────────────────────────────────────────
 
-const clientDist = path.join(__dirname, '../../client')
-await app.register(fastifyStatic, { root: clientDist, prefix: '/' })
-
-app.setNotFoundHandler((_req, reply) => {
-  reply.sendFile('index.html')
-})
+const clientDist = path.resolve(process.cwd(), 'dist/client')
+if (fs.existsSync(clientDist)) {
+  await app.register(fastifyStatic, { root: clientDist, prefix: '/' })
+  app.setNotFoundHandler((_req, reply) => {
+    reply.sendFile('index.html')
+  })
+}
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
