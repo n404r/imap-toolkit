@@ -25,7 +25,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
   }
 
   return (
-    <div className="flex items-center justify-center h-screen bg-background">
+    <div className="flex items-center justify-center min-h-screen bg-background p-4">
       <div className="card w-full max-w-sm space-y-5">
         <div>
           <div className="text-2xl mb-1">📬</div>
