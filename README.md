@@ -1,8 +1,28 @@
 # NeMo IMAP
 
-> Watch IMAP mailboxes and permanently delete emails that match your filters. Runs on a VPS, managed from a web panel.
+> Watch IMAP mailboxes and permanently delete emails that match your filters. Runs on your VPS, managed from a web panel.
 
-## Quick start
+---
+
+## ⚡ 1-Click Install (Ubuntu, Debian, AlmaLinux, Rocky, RHEL)
+
+No Docker needed. Run this directly on your server:
+
+```bash
+git clone <YOUR_REPO_URL> /opt/nemo-imap
+cd /opt/nemo-imap
+sudo bash install.sh
+```
+
+The script automatically:
+1. Detects your OS and installs Node.js 20 LTS + build dependencies.
+2. Installs npm packages and builds both server and web panel.
+3. Generates a `.env` configuration file with your admin password.
+4. Opens port 3000 in your firewall (`ufw` or `firewalld`).
+5. Configures a persistent `systemd` background service that auto-starts on boot.
+6. Prints your direct login URL: `http://<SERVER_IP>:3000`.
+
+---
 
 ### 1. Configure environment
 
