@@ -131,25 +131,10 @@ export default function Layout({ page, onNavigate, onLogout, children }: Props) 
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto bg-background p-4 sm:p-6 pb-20 md:pb-6">
+      <main className="flex-1 overflow-y-auto bg-background p-4 sm:p-6">
         {children}
       </main>
 
-      {/* Mobile Bottom Navigation Bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-surface/95 backdrop-blur border-t border-border flex items-center justify-around py-2 px-1 z-20">
-        {NAV.map((n) => (
-          <button
-            key={n.id}
-            onClick={() => handleNavigate(n.id)}
-            className={`flex flex-col items-center justify-center flex-1 py-1 text-xs transition-colors ${
-              page === n.id ? 'text-accent font-semibold' : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            <span className="text-base leading-none mb-1">{n.icon}</span>
-            <span>{n.label}</span>
-          </button>
-        ))}
-      </nav>
     </div>
   )
 }

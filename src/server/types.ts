@@ -77,3 +77,18 @@ export interface ParsedEmail {
   /** All headers as key → value[] map */
   headers: Record<string, string[]>
 }
+
+/** Live per-account mailbox statistics */
+export interface AccountMailStats {
+  account_id: number
+  /** Current total messages in INBOX */
+  inbox_total: number
+  /** Total messages evaluated since watcher started */
+  scanned: number
+  /** Total messages successfully deleted */
+  deleted: number
+  /** Messages scanned but not matched or failed to delete */
+  not_deleted: number
+  /** ISO timestamp of last scan, or null if never scanned */
+  last_scan_at: string | null
+}

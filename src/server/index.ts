@@ -203,6 +203,12 @@ app.get('/api/logs', { onRequest: [app.authenticate] }, async (req) => {
   })
 })
 
+// ─── Mailbox stats route ───────────────────────────────────────────────────────
+
+app.get('/api/stats/accounts', { onRequest: [app.authenticate] }, async () => {
+  return manager.getAllStats()
+})
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 app.get('/api/dashboard', { onRequest: [app.authenticate] }, async () => {

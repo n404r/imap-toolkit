@@ -61,6 +61,9 @@ export const api = {
       `/logs?${qs.toString()}`
     )
   },
+
+  // Live mailbox stats per account
+  getAccountStats: () => req<AccountMailStats[]>('GET', '/stats/accounts'),
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -115,6 +118,15 @@ export interface DeletionLog {
   subject?: string
   message_id?: string
   deleted_at: string
+}
+
+export interface AccountMailStats {
+  account_id: number
+  inbox_total: number
+  scanned: number
+  deleted: number
+  not_deleted: number
+  last_scan_at: string | null
 }
 
 export interface CreateAccountPayload {

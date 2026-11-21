@@ -225,12 +225,26 @@ export default function AccountsPage() {
                     <span>Security:</span>
                     <span className="text-gray-300">{a.imap_secure ? 'SSL/TLS' : 'Plain'}</span>
                   </div>
-                  {a.status_msg && (
-                    <div className="pt-1 text-danger text-[11px] truncate" title={a.status_msg}>
-                      ⚠ {a.status_msg}
-                    </div>
-                  )}
                 </div>
+
+                {/* Status / error banner */}
+                {a.status === 'error' && (
+                  <div className="mt-2.5 rounded bg-red-950/50 border border-red-800/60 p-2 text-xs text-red-300 break-words flex items-start gap-1.5">
+                    <span className="flex-shrink-0 mt-0.5">⚠</span>
+                    <span>{a.status_msg ?? 'IMAP connection error'}</span>
+                  </div>
+                )}
+                {a.status === 'connecting' && (
+                  <div className="mt-2.5 rounded bg-yellow-950/40 border border-yellow-800/50 p-2 text-xs text-yellow-300 break-words flex items-start gap-1.5">
+                    <span className="flex-shrink-0 mt-0.5">⟳</span>
+                    <span>{a.status_msg ?? 'Connecting…'}</span>
+                  </div>
+                )}
+                {a.status === 'disconnected' && a.enabled && (
+                  <div className="mt-2.5 rounded bg-gray-800/60 border border-border p-2 text-xs text-muted">
+                    Disconnected — will reconnect automatically
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 mt-3 border-t border-border">
