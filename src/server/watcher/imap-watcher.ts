@@ -134,9 +134,12 @@ export class ImapWatcher {
     })) {
       try {
         const envelope = msg.envelope
+        if (!envelope) continue
         const rawFrom = envelope.from?.[0]
         const fromStr = rawFrom
-          ? `${rawFrom.name ?? ''} <${rawFrom.mailbox}@${rawFrom.host}>`
+          ? rawFrom.address
+            ? `${rawFrom.name ?? ''} <${rawFrom.address}>`
+            : rawFrom.name ?? ''
           : ''
 
         const { name: from_name, email: from_email, domain: from_domain } =

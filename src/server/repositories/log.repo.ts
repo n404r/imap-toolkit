@@ -53,7 +53,7 @@ export const logRepo = {
   }): Promise<{ logs: DeletionLog[]; total: number }> {
     const db = getDb()
     const wheres: string[] = []
-    const params: unknown[] = []
+    const params: any[] = []
 
     if (opts.account_id !== undefined) {
       wheres.push('account_id = ?')

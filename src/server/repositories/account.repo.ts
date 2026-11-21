@@ -80,7 +80,7 @@ export const accountRepo = {
   ): Promise<Account | undefined> {
     const db = getDb()
     const fields: string[] = []
-    const values: unknown[] = []
+    const values: any[] = []
 
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label) }
     if (data.email !== undefined) { fields.push('email = ?'); values.push(data.email) }

@@ -96,7 +96,7 @@ export const filterRepo = {
   ): Promise<Filter | undefined> {
     const db = getDb()
     const fields: string[] = []
-    const values: unknown[] = []
+    const values: any[] = []
 
     if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name) }
     if (data.enabled !== undefined) { fields.push('enabled = ?'); values.push(data.enabled ? 1 : 0) }
