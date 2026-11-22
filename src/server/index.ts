@@ -225,7 +225,7 @@ app.post('/api/accounts/:id/reconnect', { onRequest: [app.authenticate] }, async
   const id = parseInt((req.params as any).id)
   const account = await accountRepo.findById(id)
   if (!account) return reply.code(404).send({ error: 'not found' })
-  manager.reconnectWatcher(account.id)
+  manager.restartWatcher(account)
   return { ok: true }
 })
 

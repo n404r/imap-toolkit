@@ -41,7 +41,13 @@ export default function AccountsPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    const id = setInterval(() => {
+      api.getAccounts().then(setAccounts).catch(() => {})
+    }, 3000)
+    return () => clearInterval(id)
+  }, [])
 
   function openCreate() {
     setEditId(null)

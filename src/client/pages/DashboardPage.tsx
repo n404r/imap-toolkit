@@ -44,7 +44,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     refresh().finally(() => setLoading(false))
-    const id = setInterval(() => { void refresh() }, 10_000)
+    const id = setInterval(() => { void refresh() }, 3000)
     return () => clearInterval(id)
   }, [])
 
