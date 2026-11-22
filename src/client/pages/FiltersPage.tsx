@@ -132,7 +132,11 @@ export default function FiltersPage() {
       if (qbPurge) {
         setQbMessage('Filter created. Purging existing matches…')
         const purgeRes = await api.purgeFilter(filter.id, { max_days: 90 })
-        setQbMessage(`Blocked ${val}! Purged ${purgeRes.deleted ?? 0} existing emails (${purgeRes.scanned ?? 0} scanned).`)
+        let msg = `Blocked ${val}! Purged ${purgeRes.deleted ?? 0} existing emails (${purgeRes.scanned ?? 0} scanned).`
+        if (purgeRes.errors && purgeRes.errors.length > 0) {
+          msg += ` (⚠ ${purgeRes.errors.join('; ')})`
+        }
+        setQbMessage(msg)
       } else {
         setQbMessage(`Blocked ${val} successfully.`)
       }
@@ -164,14 +168,22 @@ export default function FiltersPage() {
     try {
       const res = await api.purgeFilter(f.id, { max_days: 90 })
       if (res.mode === 'instant') {
+        let msg = `✔ Purged ${res.deleted ?? 0} emails (${res.scanned ?? 0} scanned)`
+        if (res.errors && res.errors.length > 0) {
+          msg += ` (⚠ Warning: ${res.errors.join('; ')})`
+        }
         setPurgeResults((prev) => ({
           ...prev,
-          [f.id]: `✔ Purged ${res.deleted ?? 0} emails (${res.scanned ?? 0} scanned)`,
+          [f.id]: msg,
         }))
       } else {
+        let msg = '⚡ Background scan running…'
+        if (res.errors && res.errors.length > 0) {
+          msg += ` (⚠ ${res.errors.join('; ')})`
+        }
         setPurgeResults((prev) => ({
           ...prev,
-          [f.id]: '⚡ Background scan running…',
+          [f.id]: msg,
         }))
         const jobs = await api.getFilterPurgeJobs(f.id)
         setPurgeJobs((prev) => ({ ...prev, [f.id]: jobs }))

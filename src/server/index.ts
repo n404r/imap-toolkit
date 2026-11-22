@@ -287,36 +287,54 @@ app.post('/api/filters/:id/purge', { onRequest: [app.authenticate] }, async (req
   if (isSenderOnly) {
     let totalDeleted = 0
     let totalScanned = 0
+    const errors: string[] = []
+
     for (const acc of accountsToScan) {
-      const res = await runInstantPurge(acc, filter, { maxDays: body.max_days ?? 90 })
-      totalDeleted += res.deleted
-      totalScanned += res.scanned
+      try {
+        const res = await runInstantPurge(acc, filter, { maxDays: body.max_days ?? 90, manager })
+        totalDeleted += res.deleted
+        totalScanned += res.scanned
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        app.log.error(`[Purge] account ${acc.email} failed: ${msg}`)
+        errors.push(`${acc.email}: ${msg}`)
+      }
     }
+
     return {
       mode: 'instant',
       deleted: totalDeleted,
       scanned: totalScanned,
+      errors: errors.length > 0 ? errors : undefined,
     }
   }
 
   // Content-based filter -> Background job
   const jobs: number[] = []
+  const errors: string[] = []
   for (const acc of accountsToScan) {
     for (const folder of acc.watched_folders.length > 0 ? acc.watched_folders : ['INBOX']) {
-      const job = await purgeRepo.create({
-        filter_id: filter.id,
-        account_id: acc.id,
-        folder,
-      })
-      jobs.push(job.id)
-      void runBackgroundPurgeJob(job.id, acc, filter, { maxDays: body.max_days ?? 90 })
+      try {
+        const job = await purgeRepo.create({
+          filter_id: filter.id,
+          account_id: acc.id,
+          folder,
+        })
+        jobs.push(job.id)
+        void runBackgroundPurgeJob(job.id, acc, filter, { maxDays: body.max_days ?? 90 })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        app.log.error(`[Purge] account ${acc.email} (${folder}) failed: ${msg}`)
+        errors.push(`${acc.email} (${folder}): ${msg}`)
+      }
     }
   }
 
   return {
     mode: 'background',
     jobIds: jobs,
-    status: 'running',
+    status: jobs.length > 0 ? 'running' : 'failed',
+    errors: errors.length > 0 ? errors : undefined,
   }
 })
 

@@ -458,6 +458,74 @@ export class FolderWatcher {
 
     this.state.reconnectDelay = Math.min(this.state.reconnectDelay * 2, MAX_RECONNECT_DELAY_MS)
   }
+
+  get isConnected(): boolean {
+    return Boolean(this.state.running && this.state.client)
+  }
+
+  async purgeSenderFilter(
+    filter: Filter,
+    maxDays: number = 90
+  ): Promise<{ deleted: number; scanned: number }> {
+    const client = this.state.client
+    if (!client || !this.state.running) {
+      throw new Error(`Watcher for ${this.folder} is not currently connected`)
+    }
+
+    const maxDaysMs = maxDays * 24 * 60 * 60 * 1000
+    const sinceDate = new Date(Date.now() - maxDaysMs)
+
+    const senderValues: string[] = []
+    for (const cond of filter.conditions) {
+      if (cond.field === 'from_email' || cond.field === 'from_domain') {
+        senderValues.push(...cond.values)
+      }
+    }
+
+    let totalDeleted = 0
+    let totalScanned = 0
+    const matchedUids = new Set<number>()
+
+    for (const val of senderValues) {
+      const uids = await client.search(
+        { from: val, since: sinceDate },
+        { uid: true }
+      )
+      if (Array.isArray(uids)) {
+        for (const uid of uids) matchedUids.add(uid)
+      }
+    }
+
+    const uidList = Array.from(matchedUids)
+    totalScanned += uidList.length
+
+    if (uidList.length > 0) {
+      for (let i = 0; i < uidList.length; i += 100) {
+        const chunk = uidList.slice(i, i + 100)
+        await client.messageDelete(chunk.join(','), { uid: true })
+        totalDeleted += chunk.length
+        this.stats.deleted += chunk.length
+        this.stats.total = Math.max(0, this.stats.total - chunk.length)
+
+        for (const uid of chunk) {
+          void logRepo.create({
+            account_id: this.account.id,
+            filter_id: filter.id,
+            filter_name: filter.name,
+            from_addr: `(purged: ${senderValues.slice(0, 2).join(',')})`,
+            subject: `Historical cleanup [UID ${uid}]`,
+            message_id: undefined,
+          }).catch(() => {})
+        }
+      }
+
+      if (this.state.trashFolderName && this.state.trashFolderName !== this.folder) {
+        void this.purgeTrashQuietly(this.state.trashFolderName)
+      }
+    }
+
+    return { deleted: totalDeleted, scanned: totalScanned }
+  }
 }
 
 // ─── ImapWatcher (Account-Level Coordinator) ─────────────────────────────────
@@ -571,6 +639,29 @@ export class ImapWatcher {
       reconnect_at: this.reconnectAt,
     }
   }
+
+  get isConnected(): boolean {
+    for (const fw of this.folderWatchers.values()) {
+      if (fw.isConnected) return true
+    }
+    return false
+  }
+
+  async purgeSenderFilter(
+    filter: Filter,
+    maxDays: number = 90
+  ): Promise<{ deleted: number; scanned: number }> {
+    let deleted = 0
+    let scanned = 0
+    for (const fw of this.folderWatchers.values()) {
+      if (fw.isConnected) {
+        const res = await fw.purgeSenderFilter(filter, maxDays)
+        deleted += res.deleted
+        scanned += res.scanned
+      }
+    }
+    return { deleted, scanned }
+  }
 }
 
 // ─── WatcherManager ───────────────────────────────────────────────────────────
@@ -579,6 +670,10 @@ export class WatcherManager {
   private watchers = new Map<number, ImapWatcher>()
 
   constructor(private getFilters: () => Filter[], private logger: Logger) {}
+
+  getWatcher(accountId: number): ImapWatcher | undefined {
+    return this.watchers.get(accountId)
+  }
 
   startAll(accounts: Account[]): void {
     for (const account of accounts) {

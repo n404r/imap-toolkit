@@ -4,7 +4,7 @@ import { accountRepo } from '../repositories/account.repo.js'
 import { logRepo } from '../repositories/log.repo.js'
 import { purgeRepo } from '../repositories/purge.repo.js'
 import { evaluateFilter } from '../lib/filter-engine.js'
-import { findTrashFolder, extractBody, parseFrom } from '../watcher/imap-watcher.js'
+import { findTrashFolder, extractBody, parseFrom, type WatcherManager } from '../watcher/imap-watcher.js'
 
 /** Checks if a filter uses ONLY from_email and/or from_domain conditions */
 export function isSenderOnlyFilter(filter: Filter): boolean {
@@ -15,10 +15,23 @@ export function isSenderOnlyFilter(filter: Filter): boolean {
 }
 
 /**
- * Instant retroactive purge using native IMAP UID SEARCH FROM
+ * Instant retroactive purge using native IMAP UID SEARCH FROM.
  * Fast and safe for large mailboxes.
+ * Reuses existing watcher connection if available to avoid provider concurrent connection limits.
  */
 export async function runInstantPurge(
+  account: Account,
+  filter: Filter,
+  options: { maxDays?: number; manager?: WatcherManager } = {}
+): Promise<{ deleted: number; scanned: number }> {
+  const watcher = options.manager?.getWatcher(account.id)
+  if (watcher && watcher.isConnected) {
+    return watcher.purgeSenderFilter(filter, options.maxDays ?? 90)
+  }
+  return runInstantPurgeStandalone(account, filter, options)
+}
+
+export async function runInstantPurgeStandalone(
   account: Account,
   filter: Filter,
   options: { maxDays?: number } = {}
