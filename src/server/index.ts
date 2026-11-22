@@ -13,8 +13,11 @@ import { getDb } from './db/connection.js'
 import { accountRepo } from './repositories/account.repo.js'
 import { filterRepo } from './repositories/filter.repo.js'
 import { logRepo } from './repositories/log.repo.js'
+import { purgeRepo } from './repositories/purge.repo.js'
 import { WatcherManager } from './watcher/imap-watcher.js'
 import { hashPassword, generateSalt } from './lib/crypto.js'
+import { ImapFlow } from 'imapflow'
+import { isSenderOnlyFilter, runInstantPurge, runBackgroundPurgeJob } from './services/purge.service.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -135,6 +138,7 @@ app.post('/api/accounts', { onRequest: [app.authenticate] }, async (req, reply) 
     imap_port: body.imap_port ?? 993,
     imap_secure: body.imap_secure ?? true,
     password: body.password,
+    watched_folders: body.watched_folders,
   })
   manager.addWatcher(account)
   return reply.code(201).send({ ...account, password_enc: undefined })
@@ -147,6 +151,59 @@ app.patch('/api/accounts/:id', { onRequest: [app.authenticate] }, async (req, re
   if (!account) return reply.code(404).send({ error: 'not found' })
   manager.restartWatcher(account)
   return { ...account, password_enc: undefined }
+})
+
+app.get('/api/accounts/:id/folders', { onRequest: [app.authenticate] }, async (req, reply) => {
+  const id = parseInt((req.params as any).id)
+  const account = await accountRepo.findById(id)
+  if (!account) return reply.code(404).send({ error: 'not found' })
+  const password = accountRepo.getPassword(account)
+  const client = new ImapFlow({
+    host: account.imap_host,
+    port: account.imap_port,
+    secure: account.imap_secure,
+    auth: { user: account.email, pass: password },
+    logger: false,
+  })
+  try {
+    await client.connect()
+    const list = await client.list()
+    await client.logout().catch(() => {})
+    return list.map((m) => ({
+      path: m.path,
+      name: m.name,
+      specialUse: m.specialUse || null,
+      flags: Array.from(m.flags || []),
+    }))
+  } catch (err: any) {
+    await client.logout().catch(() => {})
+    return reply.code(400).send({ error: err.message ?? 'Failed to list folders' })
+  }
+})
+
+app.post('/api/accounts/test-folders', { onRequest: [app.authenticate] }, async (req, reply) => {
+  const body = req.body as any
+  const client = new ImapFlow({
+    host: body.imap_host,
+    port: body.imap_port ?? 993,
+    secure: body.imap_secure ?? true,
+    auth: { user: body.email, pass: body.password },
+    logger: false,
+  })
+  try {
+    await client.connect()
+    const list = await client.list()
+    await client.logout().catch(() => {})
+    return list.map((m) => ({
+      path: m.path,
+      name: m.name,
+      specialUse: m.specialUse || null,
+      flags: Array.from(m.flags || []),
+    }))
+  } catch (err: any) {
+    await client.logout().catch(() => {})
+    return reply.code(400).send({ error: err.message ?? 'Connection failed' })
+  }
 })
 
 app.delete('/api/accounts/:id', { onRequest: [app.authenticate] }, async (req, reply) => {
@@ -189,6 +246,68 @@ app.delete('/api/filters/:id', { onRequest: [app.authenticate] }, async (req, re
   if (!ok) return reply.code(404).send({ error: 'not found' })
   void refreshFilterCache()
   return { ok: true }
+})
+
+app.post('/api/filters/:id/purge', { onRequest: [app.authenticate] }, async (req, reply) => {
+  const id = parseInt((req.params as any).id)
+  const body = (req.body as any) || {}
+  const filter = await filterRepo.findById(id)
+  if (!filter) return reply.code(404).send({ error: 'filter not found' })
+
+  let accountsToScan: import('./types.js').Account[] = []
+  if (body.account_id) {
+    const acc = await accountRepo.findById(parseInt(body.account_id))
+    if (acc) accountsToScan.push(acc)
+  } else {
+    const all = await accountRepo.findAll()
+    accountsToScan = all.filter((a) => a.enabled)
+  }
+
+  if (accountsToScan.length === 0) {
+    return reply.code(400).send({ error: 'No active accounts to scan' })
+  }
+
+  const isSenderOnly = isSenderOnlyFilter(filter)
+
+  if (isSenderOnly) {
+    let totalDeleted = 0
+    let totalScanned = 0
+    for (const acc of accountsToScan) {
+      const res = await runInstantPurge(acc, filter, { maxDays: body.max_days ?? 90 })
+      totalDeleted += res.deleted
+      totalScanned += res.scanned
+    }
+    return {
+      mode: 'instant',
+      deleted: totalDeleted,
+      scanned: totalScanned,
+    }
+  }
+
+  // Content-based filter -> Background job
+  const jobs: number[] = []
+  for (const acc of accountsToScan) {
+    for (const folder of acc.watched_folders.length > 0 ? acc.watched_folders : ['INBOX']) {
+      const job = await purgeRepo.create({
+        filter_id: filter.id,
+        account_id: acc.id,
+        folder,
+      })
+      jobs.push(job.id)
+      void runBackgroundPurgeJob(job.id, acc, filter, { maxDays: body.max_days ?? 90 })
+    }
+  }
+
+  return {
+    mode: 'background',
+    jobIds: jobs,
+    status: 'running',
+  }
+})
+
+app.get('/api/filters/:id/purge-jobs', { onRequest: [app.authenticate] }, async (req) => {
+  const id = parseInt((req.params as any).id)
+  return purgeRepo.findByFilter(id)
 })
 
 // ─── Logs routes ──────────────────────────────────────────────────────────────

@@ -1,9 +1,15 @@
 import { useEffect, useState } from 'react'
-import { api, type Filter, type FilterCondition } from '../api-client'
+import { api, type Filter, type FilterCondition, type PurgeJob } from '../api-client'
 import { CardSkeleton } from '../components/Skeleton'
 
 type Field = FilterCondition['field']
 type MatchType = FilterCondition['match_type']
+
+function isSenderOnly(f: Filter): boolean {
+  return f.conditions.length > 0 && f.conditions.every(
+    (c) => c.field === 'from_email' || c.field === 'from_domain'
+  )
+}
 
 const FIELDS: { value: Field; label: string }[] = [
   { value: 'from_email',  label: 'Sender email' },
@@ -63,6 +69,20 @@ export default function FiltersPage() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // Quick Block Sender Modal
+  const [showQuickBlock, setShowQuickBlock] = useState(false)
+  const [qbValue, setQbValue] = useState('')
+  const [qbType, setQbType] = useState<'from_email' | 'from_domain'>('from_email')
+  const [qbPurge, setQbPurge] = useState(true)
+  const [qbSaving, setQbSaving] = useState(false)
+  const [qbError, setQbError] = useState('')
+  const [qbMessage, setQbMessage] = useState('')
+
+  // Purge progress tracking per filter
+  const [purgingId, setPurgingId] = useState<number | null>(null)
+  const [purgeResults, setPurgeResults] = useState<Record<number, string>>({})
+  const [purgeJobs, setPurgeJobs] = useState<Record<number, PurgeJob[]>>({})
+
   const load = () => {
     setLoading(true)
     api.getFilters()
@@ -71,6 +91,100 @@ export default function FiltersPage() {
   }
 
   useEffect(() => { load() }, [])
+
+  // Poll background purge jobs if any are active
+  useEffect(() => {
+    const active = Object.values(purgeJobs).flat().some((j) => j.status === 'running')
+    if (!active) return
+    const timer = setInterval(() => {
+      for (const filter of filters) {
+        api.getFilterPurgeJobs(filter.id).then((jobs) => {
+          if (jobs.length > 0) {
+            setPurgeJobs((prev) => ({ ...prev, [filter.id]: jobs }))
+          }
+        }).catch(() => {})
+      }
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [purgeJobs, filters])
+
+  async function handleQuickBlock(e: React.FormEvent) {
+    e.preventDefault()
+    const trimmed = qbValue.trim().toLowerCase()
+    if (!trimmed) return
+    setQbSaving(true)
+    setQbError('')
+    setQbMessage('')
+
+    try {
+      const val = qbType === 'from_domain' ? trimmed.replace(/^@/, '') : trimmed
+      const filterName = qbType === 'from_email' ? `Block ${val}` : `Block domain @${val}`
+      const filter = await api.createFilter({
+        name: filterName,
+        logic: 'OR',
+        conditions: [{
+          field: qbType,
+          match_type: 'equals',
+          values: [val],
+        }],
+      })
+
+      if (qbPurge) {
+        setQbMessage('Filter created. Purging existing matches…')
+        const purgeRes = await api.purgeFilter(filter.id, { max_days: 90 })
+        setQbMessage(`Blocked ${val}! Purged ${purgeRes.deleted ?? 0} existing emails (${purgeRes.scanned ?? 0} scanned).`)
+      } else {
+        setQbMessage(`Blocked ${val} successfully.`)
+      }
+
+      setQbValue('')
+      load()
+      setTimeout(() => {
+        setShowQuickBlock(false)
+        setQbMessage('')
+      }, 2000)
+    } catch (err: any) {
+      setQbError(err.message ?? 'Failed to block sender')
+    } finally {
+      setQbSaving(false)
+    }
+  }
+
+  async function handlePurge(f: Filter) {
+    const isSender = isSenderOnly(f)
+    const promptMsg = isSender
+      ? `Purge all past emails matching "${f.name}" from the last 90 days?`
+      : `Scan and purge past emails in the background for "${f.name}" (last 90 days)? This processes in batches of 500.`
+
+    if (!confirm(promptMsg)) return
+
+    setPurgingId(f.id)
+    setPurgeResults((prev) => ({ ...prev, [f.id]: 'Starting purge…' }))
+
+    try {
+      const res = await api.purgeFilter(f.id, { max_days: 90 })
+      if (res.mode === 'instant') {
+        setPurgeResults((prev) => ({
+          ...prev,
+          [f.id]: `✔ Purged ${res.deleted ?? 0} emails (${res.scanned ?? 0} scanned)`,
+        }))
+      } else {
+        setPurgeResults((prev) => ({
+          ...prev,
+          [f.id]: '⚡ Background scan running…',
+        }))
+        const jobs = await api.getFilterPurgeJobs(f.id)
+        setPurgeJobs((prev) => ({ ...prev, [f.id]: jobs }))
+      }
+    } catch (err: any) {
+      setPurgeResults((prev) => ({
+        ...prev,
+        [f.id]: `❌ Error: ${err.message ?? 'Purge failed'}`,
+      }))
+    } finally {
+      setPurgingId(null)
+    }
+  }
 
   function openCreate() {
     setEditId(null)
@@ -151,8 +265,100 @@ export default function FiltersPage() {
           <h2 className="text-lg font-semibold">Filters</h2>
           <p className="text-muted text-xs mt-0.5">Define conditions for automated email deletions</p>
         </div>
-        <button className="btn-primary" onClick={openCreate}>+ New filter</button>
+        <div className="flex gap-2">
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setShowQuickBlock(true)
+              setShowForm(false)
+              setQbError('')
+              setQbMessage('')
+            }}
+          >
+            + Block Sender
+          </button>
+          <button className="btn-ghost" onClick={openCreate}>
+            + Custom Filter
+          </button>
+        </div>
       </div>
+
+      {/* Quick Block Sender Modal */}
+      {showQuickBlock && (
+        <div className="card space-y-4 border-accent/40 bg-card">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-100 flex items-center gap-1.5">
+              <span>🛡️</span> Quick Block Sender
+            </h3>
+            <button
+              className="text-muted hover:text-gray-200 text-xs px-1"
+              onClick={() => setShowQuickBlock(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <p className="text-xs text-muted">
+            Instantly block any email address or full domain so it is permanently deleted as soon as it arrives.
+          </p>
+          <form onSubmit={handleQuickBlock} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-muted block mb-1">Block Target</label>
+                <select
+                  className="input"
+                  value={qbType}
+                  onChange={(e) => setQbType(e.target.value as any)}
+                >
+                  <option value="from_email">Specific Email Address</option>
+                  <option value="from_domain">Entire Domain (@example.com)</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-xs text-muted block mb-1">
+                  {qbType === 'from_email' ? 'Sender Email to Block' : 'Sender Domain (@ will be removed)'}
+                </label>
+                <input
+                  className="input"
+                  value={qbValue}
+                  onChange={(e) => setQbValue(e.target.value)}
+                  placeholder={
+                    qbType === 'from_email'
+                      ? 'klm_royal_dutch_airlines@infos-klm.com'
+                      : 'infos-klm.com'
+                  }
+                  required
+                />
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={qbPurge}
+                onChange={(e) => setQbPurge(e.target.checked)}
+                className="accent-accent"
+              />
+              <span>Also purge existing emails from this sender (last 90 days)</span>
+            </label>
+
+            {qbError && <p className="text-danger text-xs">{qbError}</p>}
+            {qbMessage && <p className="text-green-400 text-xs font-medium">{qbMessage}</p>}
+
+            <div className="flex gap-2 pt-1">
+              <button className="btn-primary text-xs" disabled={qbSaving}>
+                {qbSaving ? 'Blocking…' : 'Block Sender'}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => setShowQuickBlock(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Filter Form */}
       {showForm && (
@@ -297,8 +503,42 @@ export default function FiltersPage() {
                       </div>
                     ))}
                   </div>
+
+                  {/* Purge results banner */}
+                  {purgeResults[f.id] && (
+                    <div className="mt-2.5 text-xs bg-background/80 py-1.5 px-2.5 rounded border border-border/70 text-gray-300">
+                      {purgeResults[f.id]}
+                    </div>
+                  )}
+
+                  {/* Background purge jobs status */}
+                  {purgeJobs[f.id] && purgeJobs[f.id].length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {purgeJobs[f.id].map((job) => (
+                        <div
+                          key={job.id}
+                          className="text-[11px] bg-background/60 py-1 px-2 rounded border border-border/40 flex items-center justify-between text-muted"
+                        >
+                          <span className="font-mono text-gray-300">{job.folder}</span>
+                          <span>
+                            {job.status === 'running' ? '⟳ ' : '✔ '}
+                            {job.scanned_msgs.toLocaleString()} / {job.total_msgs.toLocaleString()} scanned ({job.deleted_msgs} deleted)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
                 <div className="flex gap-1.5 flex-shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-border">
+                  <button
+                    className="btn-ghost text-xs px-2.5 py-1 text-accent hover:text-accent-hover"
+                    disabled={purgingId === f.id}
+                    onClick={() => handlePurge(f)}
+                    title={isSenderOnly(f) ? 'Instant purge from past 90 days' : 'Scan past 90 days in background'}
+                  >
+                    {purgingId === f.id ? 'Purging…' : isSenderOnly(f) ? '⚡ Purge now' : '⟳ Scan history'}
+                  </button>
                   <button
                     className="btn-ghost text-xs px-2.5 py-1"
                     onClick={() => toggleEnabled(f)}

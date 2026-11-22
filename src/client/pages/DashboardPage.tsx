@@ -130,7 +130,7 @@ export default function DashboardPage() {
                         <StatCell value={ms.inbox_total} label="Inbox total" color="text-gray-300" />
                         <StatCell value={ms.scanned} label="Scanned" color="text-blue-400" />
                         <StatCell value={ms.deleted} label="Deleted" color="text-red-400" />
-                        <StatCell value={ms.not_deleted} label="Not deleted" color="text-yellow-400" />
+                        <StatCell value={ms.skipped} label="Skipped" color="text-yellow-400" />
                       </div>
                       {ms.last_scan_at && (
                         <div className="text-center text-muted text-[10px] mt-2 px-3">

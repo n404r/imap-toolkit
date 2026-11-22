@@ -48,6 +48,8 @@ export interface Account {
   imap_secure: boolean
   /** AES-256-GCM encrypted password, base64 */
   password_enc: string
+  /** Folders watched by this account, e.g. ["INBOX"] */
+  watched_folders: string[]
   enabled: boolean
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   status_msg?: string
@@ -64,6 +66,20 @@ export interface DeletionLog {
   subject?: string
   message_id?: string
   deleted_at: string
+}
+
+export interface PurgeJob {
+  id: number
+  filter_id: number
+  account_id: number
+  folder: string
+  status: 'running' | 'completed' | 'failed'
+  total_msgs: number
+  scanned_msgs: number
+  deleted_msgs: number
+  error_msg?: string
+  created_at: string
+  updated_at: string
 }
 
 /** Minimal parsed email fields handed to the filter engine */
@@ -87,8 +103,8 @@ export interface AccountMailStats {
   scanned: number
   /** Total messages successfully deleted */
   deleted: number
-  /** Messages scanned but not matched or failed to delete */
-  not_deleted: number
+  /** Messages scanned but not matched (left in inbox) */
+  skipped: number
   /** ISO timestamp of last scan, or null if never scanned */
   last_scan_at: string | null
 }

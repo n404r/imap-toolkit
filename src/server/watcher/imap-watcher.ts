@@ -1,20 +1,20 @@
 import { ImapFlow } from 'imapflow'
-import type { Account, ParsedEmail } from '../types.js'
-import type { Filter } from '../types.js'
+import type { Account, ParsedEmail, Filter, AccountMailStats } from '../types.js'
 import { findMatchingFilter } from '../lib/filter-engine.js'
 import { accountRepo } from '../repositories/account.repo.js'
 import { logRepo } from '../repositories/log.repo.js'
 
 const RECONNECT_DELAY_MS = 5_000
 const MAX_RECONNECT_DELAY_MS = 60_000
+const RECONCILE_INTERVAL_MS = 5 * 60 * 1000 // 5-minute safety net sweep
 
 /** Extract a plain-text body from raw IMAP message text */
-function extractBody(raw: string): string {
+export function extractBody(raw: string): string {
   return raw.replace(/<[^>]+>/g, ' ').trim()
 }
 
 /** Parse a raw "From" header value into name, email, domain */
-function parseFrom(from: string): { name: string; email: string; domain: string } {
+export function parseFrom(from: string): { name: string; email: string; domain: string } {
   const match = from.match(/^(?:"?(.+?)"?\s+)?<?([^\s<>]+@[^\s<>]+)>?$/)
   if (match) {
     const email = (match[2] ?? '').toLowerCase().trim()
@@ -24,53 +24,96 @@ function parseFrom(from: string): { name: string; email: string; domain: string 
   return { name: from, email: from.toLowerCase(), domain: '' }
 }
 
-export type AccountMailStats = {
-  account_id: number
-  inbox_total: number      // last known total messages in INBOX
-  scanned: number          // messages evaluated since watcher started
-  deleted: number          // messages successfully deleted
-  not_deleted: number      // messages scanned but not matched / delete failed
+/**
+ * Dynamically discover the trash folder path via RFC 6154 specialUse attribute
+ * or localized name fallbacks (English, French, etc.)
+ */
+export async function findTrashFolder(client: ImapFlow): Promise<string | null> {
+  try {
+    const list = await client.list()
+    for (const mb of list) {
+      if (mb.specialUse === '\\Trash' || (mb.flags && mb.flags.has('\\Trash'))) {
+        return mb.path
+      }
+    }
+    const commonTrashNames = [
+      '[gmail]/trash',
+      '[gmail]/corbeille',
+      'trash',
+      'corbeille',
+      'deleted messages',
+      'deleted items',
+      'elements supprimes',
+      'éléments supprimés',
+      'gelöschte elemente',
+      'papelera',
+    ]
+    for (const mb of list) {
+      const p = mb.path.toLowerCase()
+      const n = mb.name.toLowerCase()
+      if (commonTrashNames.includes(p) || commonTrashNames.includes(n)) {
+        return mb.path
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null
+}
+
+type Logger = { info: (...a: unknown[]) => void; error: (...a: unknown[]) => void }
+
+type FolderWatcherState = {
+  client: ImapFlow | null
+  running: boolean
+  processing: boolean
+  pendingRescan: boolean
+  reconnectDelay: number
+  timer: ReturnType<typeof setTimeout> | null
+  reconcileTimer: ReturnType<typeof setInterval> | null
+  trashFolderName: string | null
+}
+
+export type FolderStats = {
+  total: number
+  scanned: number
+  deleted: number
+  skipped: number
   last_scan_at: string | null
 }
 
-type WatcherState = {
-  client: ImapFlow | null
-  running: boolean
-  processing: boolean       // guard against concurrent exists events
-  reconnectDelay: number
-  timer: ReturnType<typeof setTimeout> | null
-}
-
 /**
- * Manages a single IMAP IDLE connection for one account.
- * Properly breaks IDLE to fetch+delete, then re-enters IDLE.
+ * Watches a single folder for a single account.
+ * Uses UID-based tracking, queued rescan loop, and dynamic trash detection.
  */
-export class ImapWatcher {
-  private state: WatcherState = {
+export class FolderWatcher {
+  private state: FolderWatcherState = {
     client: null,
     running: false,
     processing: false,
+    pendingRescan: false,
     reconnectDelay: RECONNECT_DELAY_MS,
     timer: null,
+    reconcileTimer: null,
+    trashFolderName: null,
   }
 
-  // Per-watcher in-memory stats
-  readonly stats: AccountMailStats
+  highestSeenUid = 0
+
+  readonly stats: FolderStats = {
+    total: 0,
+    scanned: 0,
+    deleted: 0,
+    skipped: 0,
+    last_scan_at: null,
+  }
 
   constructor(
     private readonly account: Account,
+    readonly folder: string,
     private getFilters: () => Filter[],
-    private logger: { info: (...a: unknown[]) => void; error: (...a: unknown[]) => void }
-  ) {
-    this.stats = {
-      account_id: account.id,
-      inbox_total: 0,
-      scanned: 0,
-      deleted: 0,
-      not_deleted: 0,
-      last_scan_at: null,
-    }
-  }
+    private logger: Logger
+  ) {}
 
   start(): void {
     if (this.state.running) return
@@ -84,11 +127,14 @@ export class ImapWatcher {
       clearTimeout(this.state.timer)
       this.state.timer = null
     }
+    if (this.state.reconcileTimer) {
+      clearInterval(this.state.reconcileTimer)
+      this.state.reconcileTimer = null
+    }
     if (this.state.client) {
       void this.state.client.logout().catch(() => {})
       this.state.client = null
     }
-    void accountRepo.updateStatus(this.account.id, 'disconnected')
   }
 
   private connect(): void {
@@ -105,22 +151,19 @@ export class ImapWatcher {
 
     this.state.client = client
     this.state.processing = false
-    void accountRepo.updateStatus(this.account.id, 'connecting', 'Connecting to IMAP server…')
+    this.state.pendingRescan = false
 
     let lastError: string | null = null
 
     client.on('error', (err: Error) => {
       lastError = err.message
-      this.logger.error(`[IMAP ${this.account.email}] error:`, err.message)
-      void accountRepo.updateStatus(this.account.id, 'error', err.message)
+      this.logger.error(`[IMAP ${this.account.email}:${this.folder}] error:`, err.message)
+      void accountRepo.updateStatus(this.account.id, 'error', `${this.folder}: ${err.message}`)
     })
 
     this.runSession(client).catch((err: unknown) => {
       const errMsg = err instanceof Error ? err.message : (err ? String(err) : '')
-      this.logger.error(
-        `[IMAP ${this.account.email}] session ended:`,
-        errMsg
-      )
+      this.logger.error(`[IMAP ${this.account.email}:${this.folder}] session ended:`, errMsg)
       this.scheduleReconnect(errMsg || lastError || undefined)
     })
   }
@@ -128,178 +171,242 @@ export class ImapWatcher {
   private async runSession(client: ImapFlow): Promise<void> {
     await client.connect()
     this.state.reconnectDelay = RECONNECT_DELAY_MS
-    accountRepo.updateStatus(this.account.id, 'connected')
-    this.logger.info(`[IMAP ${this.account.email}] connected`)
+    this.logger.info(`[IMAP ${this.account.email}:${this.folder}] connected`)
 
-    // Get current inbox size on connect — this is our baseline.
-    // We ONLY process messages that arrive AFTER this point (seq > knownCount).
-    let lock = await client.getMailboxLock('INBOX')
-    let knownCount: number
+    // Discover trash folder path for permanent deletion
+    this.state.trashFolderName = await findTrashFolder(client)
+    if (this.state.trashFolderName) {
+      this.logger.info(`[IMAP ${this.account.email}:${this.folder}] detected trash folder: ${this.state.trashFolderName}`)
+    }
+
+    // Lock target mailbox and establish baseline UID
+    let lock = await client.getMailboxLock(this.folder)
     try {
-      const status = await client.status('INBOX', { messages: true })
-      knownCount = status.messages ?? 0
-      this.stats.inbox_total = knownCount
-      this.logger.info(`[IMAP ${this.account.email}] inbox baseline: ${knownCount} messages`)
+      const status = await client.status(this.folder, { messages: true, uidNext: true })
+      this.stats.total = status.messages ?? 0
+
+      if (typeof status.uidNext === 'number' && status.uidNext > 1) {
+        this.highestSeenUid = status.uidNext - 1
+      } else {
+        const searchRes = await client.search({ all: true }, { uid: true })
+        if (Array.isArray(searchRes) && searchRes.length > 0) {
+          this.highestSeenUid = Math.max(...searchRes)
+        } else {
+          this.highestSeenUid = 0
+        }
+      }
+      this.logger.info(
+        `[IMAP ${this.account.email}:${this.folder}] baseline established: total=${this.stats.total}, highestSeenUid=${this.highestSeenUid}`
+      )
     } finally {
       lock.release()
     }
 
-    // Enter IDLE — only react to truly new messages (count > knownCount)
+    // Setup 5-minute periodic reconciliation sweep
+    if (this.state.reconcileTimer) clearInterval(this.state.reconcileTimer)
+    this.state.reconcileTimer = setInterval(() => {
+      if (this.state.running) {
+        this.logger.info(`[IMAP ${this.account.email}:${this.folder}] periodic reconciliation sweep`)
+        void this.triggerScan()
+      }
+    }, RECONCILE_INTERVAL_MS)
+
+    // Enter IDLE loop and handle exists notifications
     await new Promise<void>((_, reject) => {
       client.on('error', reject)
       client.on('close', () => reject(new Error('connection closed')))
-      client.on('exists', async (data: { count: number }) => {
-        const newCount = data.count ?? knownCount
-        this.stats.inbox_total = newCount
 
-        // No new messages — maybe a delete notification, ignore
-        if (newCount <= knownCount) return
-
-        // Guard: skip if already processing a previous batch
+      client.on('exists', (data: { count: number }) => {
+        if (typeof data.count === 'number') {
+          this.stats.total = data.count
+        }
         if (this.state.processing) {
-          knownCount = newCount
+          // New mail arrived while previous batch is processing -> queue rescan
+          this.state.pendingRescan = true
           return
         }
-        this.state.processing = true
-
-        const firstNewSeq = knownCount + 1
-        knownCount = newCount  // advance baseline before async work
-
-        try {
-          await this.processNewMessages(client, firstNewSeq, newCount)
-        } catch (err) {
-          this.logger.error(`[IMAP ${this.account.email}] processNewMessages error:`, err)
-        } finally {
-          this.state.processing = false
-        }
+        void this.triggerScan()
       })
     })
   }
 
   /**
-   * Fetch only messages in sequence range [fromSeq, toSeq], evaluate filters,
-   * delete matches. Never touches old messages.
+   * Triggers a scan loop. If concurrent events fire while processing,
+   * pendingRescan remains true, causing the loop to run again immediately.
    */
-  private async processNewMessages(client: ImapFlow, fromSeq: number, toSeq: number): Promise<void> {
+  async triggerScan(): Promise<void> {
+    if (!this.state.running || this.state.processing || !this.state.client) return
+    this.state.processing = true
+
+    try {
+      while (this.state.running && this.state.client) {
+        this.state.pendingRescan = false
+        await this.processNewMessages()
+        if (!this.state.pendingRescan) break
+      }
+    } catch (err) {
+      this.logger.error(`[IMAP ${this.account.email}:${this.folder}] triggerScan error:`, err)
+    } finally {
+      this.state.processing = false
+    }
+  }
+
+  /**
+   * Fetches only messages with UID > highestSeenUid, checks against enabled filters,
+   * and deletes any matching messages.
+   */
+  private async processNewMessages(): Promise<void> {
+    const client = this.state.client
+    if (!client) return
+
     const filters = this.getFilters().filter((f) => f.enabled)
     this.stats.last_scan_at = new Date().toISOString()
 
-    const seqRange = `${fromSeq}:${toSeq}`
-    this.logger.info(`[IMAP ${this.account.email}] processing new messages seq ${seqRange}`)
-
     let lock: Awaited<ReturnType<typeof client.getMailboxLock>> | null = null
     try {
-      lock = await client.getMailboxLock('INBOX')
+      lock = await client.getMailboxLock(this.folder)
 
+      // Query for any messages with UID strictly greater than highestSeenUid
+      const searchRes = await client.search(
+        { uid: `${this.highestSeenUid + 1}:*` },
+        { uid: true }
+      )
+
+      const newUids = (Array.isArray(searchRes) ? searchRes : [])
+        .filter((uid) => uid > this.highestSeenUid)
+        .sort((a, b) => a - b)
+
+      if (newUids.length === 0) return
+
+      this.logger.info(
+        `[IMAP ${this.account.email}:${this.folder}] processing ${newUids.length} new message(s) [UIDs: ${newUids[0]}..${newUids[newUids.length - 1]}]`
+      )
+
+      // If no filters enabled, just advance highestSeenUid and mark skipped
       if (filters.length === 0) {
-        lock.release()
-        lock = null
+        this.stats.scanned += newUids.length
+        this.stats.skipped += newUids.length
+        this.highestSeenUid = Math.max(this.highestSeenUid, ...newUids)
         return
       }
 
-      // Fetch only the new messages by sequence range (not all-mailbox)
-      const toDelete: Array<{ uid: number; from_email: string; subject: string; messageId: string | undefined; filter: Filter }> = []
+      // Process in chunks of 50 UIDs
+      const CHUNK_SIZE = 50
+      let deletedAny = false
 
-      for await (const msg of client.fetch(seqRange, {
-        envelope: true,
-        source: true,
-      })) {
-        try {
-          const envelope = msg.envelope
-          if (!envelope) continue
+      for (let i = 0; i < newUids.length; i += CHUNK_SIZE) {
+        const chunk = newUids.slice(i, i + CHUNK_SIZE)
+        const toDelete: Array<{
+          uid: number
+          from_email: string
+          subject: string
+          messageId: string | undefined
+          filter: Filter
+        }> = []
 
-          const rawFrom = envelope.from?.[0]
-          const fromStr = rawFrom
-            ? rawFrom.address
-              ? `${rawFrom.name ?? ''} <${rawFrom.address}>`
-              : rawFrom.name ?? ''
-            : ''
+        for await (const msg of client.fetch(chunk.join(','), {
+          envelope: true,
+          source: true,
+        }, { uid: true })) {
+          try {
+            const envelope = msg.envelope
+            if (!envelope) continue
 
-          const { name: from_name, email: from_email, domain: from_domain } = parseFrom(fromStr)
+            const rawFrom = envelope.from?.[0]
+            const fromStr = rawFrom
+              ? rawFrom.address
+                ? `${rawFrom.name ?? ''} <${rawFrom.address}>`
+                : rawFrom.name ?? ''
+              : ''
 
-          const rawBody = msg.source
-            ? Buffer.isBuffer(msg.source)
-              ? msg.source.toString('utf8')
-              : String(msg.source)
-            : ''
+            const { name: from_name, email: from_email, domain: from_domain } = parseFrom(fromStr)
 
-          const parsed: ParsedEmail = {
-            from_email,
-            from_domain,
-            from_name,
-            subject: envelope.subject ?? '',
-            body: extractBody(rawBody),
-            headers: {},
-          }
+            const rawBody = msg.source
+              ? Buffer.isBuffer(msg.source)
+                ? msg.source.toString('utf8')
+                : String(msg.source)
+              : ''
 
-          this.stats.scanned++
-          const matched = findMatchingFilter(parsed, filters)
-
-          if (matched) {
-            toDelete.push({
-              uid: msg.uid,
+            const parsed: ParsedEmail = {
               from_email,
+              from_domain,
+              from_name,
               subject: envelope.subject ?? '',
-              messageId: envelope.messageId ?? undefined,
-              filter: matched,
-            })
-          } else {
-            this.stats.not_deleted++
+              body: extractBody(rawBody),
+              headers: {},
+            }
+
+            this.stats.scanned++
+            const matched = findMatchingFilter(parsed, filters)
+
+            if (matched) {
+              toDelete.push({
+                uid: msg.uid,
+                from_email,
+                subject: envelope.subject ?? '',
+                messageId: envelope.messageId ?? undefined,
+                filter: matched,
+              })
+            } else {
+              this.stats.skipped++
+            }
+          } catch (msgErr) {
+            this.logger.error(`[IMAP ${this.account.email}:${this.folder}] error reading message:`, msgErr)
           }
-        } catch (msgErr) {
-          this.logger.error(
-            `[IMAP ${this.account.email}] error reading message:`,
-            msgErr
-          )
         }
+
+        // Delete matches
+        for (const item of toDelete) {
+          try {
+            this.logger.info(
+              `[IMAP ${this.account.email}:${this.folder}] deleting uid=${item.uid} matched filter "${item.filter.name}"`
+            )
+            await client.messageDelete(String(item.uid), { uid: true })
+            this.stats.deleted++
+            this.stats.total = Math.max(0, this.stats.total - 1)
+            deletedAny = true
+
+            void logRepo.create({
+              account_id: this.account.id,
+              filter_id: item.filter.id,
+              filter_name: item.filter.name,
+              from_addr: item.from_email,
+              subject: item.subject,
+              message_id: item.messageId,
+            }).catch((logErr) => {
+              this.logger.error(`[IMAP ${this.account.email}:${this.folder}] log write failed:`, logErr)
+            })
+          } catch (delErr) {
+            this.logger.error(
+              `[IMAP ${this.account.email}:${this.folder}] delete failed uid=${item.uid}:`,
+              delErr
+            )
+            this.stats.skipped++
+          }
+        }
+
+        this.highestSeenUid = Math.max(this.highestSeenUid, ...chunk)
       }
 
-      // Delete matched messages
-      for (const item of toDelete) {
+      // If any messages were deleted, purge trash dynamically
+      if (deletedAny && this.state.trashFolderName && this.state.trashFolderName !== this.folder) {
         try {
-          this.logger.info(
-            `[IMAP ${this.account.email}] deleting uid=${item.uid} matched filter "${item.filter.name}"`
-          )
-          await client.messageDelete(String(item.uid), { uid: true })
-          this.stats.deleted++
-          this.stats.inbox_total = Math.max(0, this.stats.inbox_total - 1)
-
-          logRepo.create({
-            account_id: this.account.id,
-            filter_id: item.filter.id,
-            filter_name: item.filter.name,
-            from_addr: item.from_email,
-            subject: item.subject,
-            message_id: item.messageId,
-          }).catch((logErr) => {
-            this.logger.error(`[IMAP ${this.account.email}] log write failed:`, logErr)
-          })
-
-          // Gmail: also purge Trash
-          if (this.account.imap_host.endsWith('gmail.com')) {
-            lock!.release()
-            lock = null
-            try {
-              const trashLock = await client.getMailboxLock('[Gmail]/Trash')
-              try {
-                const trashUids = await client.search({ all: true }, { uid: true })
-                if (Array.isArray(trashUids) && trashUids.length > 0) {
-                  await client.messageDelete(trashUids.join(','), { uid: true })
-                }
-              } finally {
-                trashLock.release()
-              }
-            } catch {
-              // Trash may not exist
+          lock.release()
+          lock = null
+          const trashLock = await client.getMailboxLock(this.state.trashFolderName)
+          try {
+            const trashUids = await client.search({ all: true }, { uid: true })
+            if (Array.isArray(trashUids) && trashUids.length > 0) {
+              await client.messageDelete(trashUids.join(','), { uid: true })
+              this.logger.info(
+                `[IMAP ${this.account.email}] purged ${trashUids.length} messages from trash (${this.state.trashFolderName})`
+              )
             }
-            lock = await client.getMailboxLock('INBOX')
+          } finally {
+            trashLock.release()
           }
-        } catch (delErr) {
-          this.logger.error(
-            `[IMAP ${this.account.email}] delete failed uid=${item.uid}:`,
-            delErr
-          )
-          this.stats.not_deleted++
+        } catch (trashErr) {
+          this.logger.error(`[IMAP ${this.account.email}] trash purge error:`, trashErr)
         }
       }
     } finally {
@@ -313,33 +420,115 @@ export class ImapWatcher {
     if (!this.state.running) return
     const delaySec = Math.round(this.state.reconnectDelay / 1000)
     const statusMsg = reason
-      ? `${reason} (reconnecting in ${delaySec}s…)`
-      : `Reconnecting in ${delaySec}s…`
+      ? `${this.folder}: ${reason} (reconnecting in ${delaySec}s…)`
+      : `${this.folder}: Reconnecting in ${delaySec}s…`
 
-    accountRepo.updateStatus(
-      this.account.id,
-      'error',
-      statusMsg
-    )
+    void accountRepo.updateStatus(this.account.id, 'error', statusMsg)
+
     this.state.timer = setTimeout(() => {
       if (this.state.running) this.connect()
     }, this.state.reconnectDelay)
 
-    this.state.reconnectDelay = Math.min(
-      this.state.reconnectDelay * 2,
-      MAX_RECONNECT_DELAY_MS
-    )
+    this.state.reconnectDelay = Math.min(this.state.reconnectDelay * 2, MAX_RECONNECT_DELAY_MS)
+  }
+}
+
+// ─── ImapWatcher (Account-Level Coordinator) ─────────────────────────────────
+
+/**
+ * Coordinates all folder watchers for one account.
+ * Maintains one FolderWatcher instance per watched folder.
+ */
+export class ImapWatcher {
+  private folderWatchers = new Map<string, FolderWatcher>()
+
+  constructor(
+    private readonly account: Account,
+    private getFilters: () => Filter[],
+    private logger: Logger
+  ) {}
+
+  start(): void {
+    const folders = this.getWatchedFolders()
+    for (const folder of folders) {
+      if (!this.folderWatchers.has(folder)) {
+        const fw = new FolderWatcher(this.account, folder, this.getFilters, this.logger)
+        this.folderWatchers.set(folder, fw)
+        fw.start()
+      }
+    }
+    void accountRepo.updateStatus(this.account.id, 'connected')
+  }
+
+  stop(): void {
+    for (const fw of this.folderWatchers.values()) {
+      fw.stop()
+    }
+    this.folderWatchers.clear()
+    void accountRepo.updateStatus(this.account.id, 'disconnected')
+  }
+
+  updateFolders(newFolders: string[]): void {
+    const current = new Set(this.folderWatchers.keys())
+    const targets = new Set(newFolders.length > 0 ? newFolders : ['INBOX'])
+
+    for (const f of current) {
+      if (!targets.has(f)) {
+        this.folderWatchers.get(f)?.stop()
+        this.folderWatchers.delete(f)
+      }
+    }
+
+    for (const f of targets) {
+      if (!this.folderWatchers.has(f)) {
+        const fw = new FolderWatcher(this.account, f, this.getFilters, this.logger)
+        this.folderWatchers.set(f, fw)
+        fw.start()
+      }
+    }
+  }
+
+  private getWatchedFolders(): string[] {
+    const f = this.account.watched_folders
+    return Array.isArray(f) && f.length > 0 ? f : ['INBOX']
+  }
+
+  get stats(): AccountMailStats {
+    let inbox_total = 0
+    let scanned = 0
+    let deleted = 0
+    let skipped = 0
+    let latestScan: string | null = null
+
+    for (const fw of this.folderWatchers.values()) {
+      if (fw.folder.toUpperCase() === 'INBOX') {
+        inbox_total = fw.stats.total
+      } else if (inbox_total === 0) {
+        inbox_total += fw.stats.total
+      }
+      scanned += fw.stats.scanned
+      deleted += fw.stats.deleted
+      skipped += fw.stats.skipped
+      if (fw.stats.last_scan_at) {
+        if (!latestScan || fw.stats.last_scan_at > latestScan) {
+          latestScan = fw.stats.last_scan_at
+        }
+      }
+    }
+
+    return {
+      account_id: this.account.id,
+      inbox_total,
+      scanned,
+      deleted,
+      skipped,
+      last_scan_at: latestScan,
+    }
   }
 }
 
 // ─── WatcherManager ───────────────────────────────────────────────────────────
 
-type Logger = { info: (...a: unknown[]) => void; error: (...a: unknown[]) => void }
-
-/**
- * Manages all ImapWatcher instances.
- * Call startAll() on boot, then addWatcher/removeWatcher as accounts change.
- */
 export class WatcherManager {
   private watchers = new Map<number, ImapWatcher>()
 
@@ -376,14 +565,12 @@ export class WatcherManager {
     this.watchers.clear()
   }
 
-  /** Return live mailbox stats for all running watchers */
-  getAllStats(): import('../types.js').AccountMailStats[] {
-    return Array.from(this.watchers.values()).map((w) => ({ ...w.stats }))
+  getAllStats(): AccountMailStats[] {
+    return Array.from(this.watchers.values()).map((w) => w.stats)
   }
 
-  /** Return live mailbox stats for a single account, or undefined */
-  getStats(accountId: number): import('../types.js').AccountMailStats | undefined {
+  getStats(accountId: number): AccountMailStats | undefined {
     const w = this.watchers.get(accountId)
-    return w ? { ...w.stats } : undefined
+    return w ? w.stats : undefined
   }
 }

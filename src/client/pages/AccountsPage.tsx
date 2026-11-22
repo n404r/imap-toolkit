@@ -9,6 +9,7 @@ const EMPTY_FORM: CreateAccountPayload = {
   imap_port: 993,
   imap_secure: true,
   password: '',
+  watched_folders: ['INBOX'],
 }
 
 function StatusBadge({ status }: { status: Account['status'] }) {
@@ -29,6 +30,8 @@ export default function AccountsPage() {
   const [editId, setEditId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [serverFolders, setServerFolders] = useState<Array<{ path: string; name: string; specialUse: string | null; flags: string[] }>>([])
+  const [fetchingFolders, setFetchingFolders] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -42,6 +45,7 @@ export default function AccountsPage() {
   function openCreate() {
     setEditId(null)
     setForm(EMPTY_FORM)
+    setServerFolders([])
     setError('')
     setShowForm(true)
   }
@@ -55,9 +59,42 @@ export default function AccountsPage() {
       imap_port: a.imap_port,
       imap_secure: a.imap_secure,
       password: '',
+      watched_folders: a.watched_folders && a.watched_folders.length > 0 ? a.watched_folders : ['INBOX'],
     })
+    setServerFolders([])
     setError('')
     setShowForm(true)
+  }
+
+  async function handleFetchFolders() {
+    setFetchingFolders(true)
+    setError('')
+    try {
+      let folders: Array<{ path: string; name: string; specialUse: string | null; flags: string[] }>
+      if (editId !== null) {
+        folders = await api.getAccountFolders(editId)
+      } else {
+        if (!form.email || !form.password || !form.imap_host) {
+          throw new Error('Please enter Email, Host, and Password first to detect folders.')
+        }
+        folders = await api.testAccountFolders(form)
+      }
+      setServerFolders(folders)
+
+      // If only default INBOX selected, also default select Junk/Spam folders
+      const current = form.watched_folders ?? ['INBOX']
+      const autoSelect = new Set(current)
+      for (const f of folders) {
+        if (f.specialUse && (f.specialUse.includes('Junk') || f.specialUse.includes('Spam'))) {
+          autoSelect.add(f.path)
+        }
+      }
+      setForm({ ...form, watched_folders: Array.from(autoSelect) })
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to retrieve folders from server')
+    } finally {
+      setFetchingFolders(false)
+    }
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -172,6 +209,65 @@ export default function AccountsPage() {
               />
               Use SSL/TLS
             </label>
+
+            {/* Folders selector */}
+            <div className="pt-1">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-muted block font-medium">Monitored Folders</label>
+                <button
+                  type="button"
+                  className="text-xs text-accent hover:underline flex items-center gap-1 font-medium"
+                  disabled={fetchingFolders}
+                  onClick={handleFetchFolders}
+                >
+                  {fetchingFolders ? 'Detecting…' : '↻ Detect from Server'}
+                </button>
+              </div>
+
+              {serverFolders.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto p-2.5 bg-background border border-border rounded text-xs">
+                  {serverFolders.map((f) => {
+                    const checked = form.watched_folders?.includes(f.path) ?? false
+                    return (
+                      <label key={f.path} className="flex items-center gap-2 text-gray-200 cursor-pointer select-none hover:bg-white/5 p-1 rounded">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const cur = form.watched_folders ?? ['INBOX']
+                            const next = e.target.checked
+                              ? [...cur, f.path]
+                              : cur.filter((x) => x !== f.path)
+                            setForm({ ...form, watched_folders: next.length > 0 ? next : ['INBOX'] })
+                          }}
+                          className="accent-accent flex-shrink-0"
+                        />
+                        <span className="truncate font-mono text-[11px]" title={f.path}>{f.name}</span>
+                        {f.specialUse && (
+                          <span className="text-[10px] text-accent/80 font-sans ml-auto">
+                            {f.specialUse.replace('\\', '')}
+                          </span>
+                        )}
+                      </label>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-xs text-muted bg-background border border-border rounded p-2.5 space-y-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span>Watching:</span>
+                    {(form.watched_folders ?? ['INBOX']).map((folder) => (
+                      <span key={folder} className="badge-gray text-[10px] font-mono px-1.5 py-0.5 rounded">
+                        {folder}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-muted">
+                    Click <strong>Detect from Server</strong> above to fetch and monitor specific folders (like Orange.fr alias folders or Spam).
+                  </p>
+                </div>
+              )}
+            </div>
             {error && <p className="text-danger text-sm">{error}</p>}
             <div className="flex gap-2 pt-1">
               <button className="btn-primary" disabled={saving}>
@@ -224,6 +320,16 @@ export default function AccountsPage() {
                   <div className="flex justify-between">
                     <span>Security:</span>
                     <span className="text-gray-300">{a.imap_secure ? 'SSL/TLS' : 'Plain'}</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-1 border-t border-border/40">
+                    <span>Folders:</span>
+                    <div className="flex flex-wrap gap-1 justify-end max-w-[70%]">
+                      {(a.watched_folders && a.watched_folders.length > 0 ? a.watched_folders : ['INBOX']).map((f) => (
+                        <span key={f} className="badge-gray text-[10px] font-mono px-1.5 py-0.2 rounded" title={f}>
+                          {f}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
 

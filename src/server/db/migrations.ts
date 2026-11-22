@@ -56,6 +56,25 @@ const MIGRATIONS: { id: number; statements: string[] }[] = [
       )`,
     ],
   },
+  {
+    id: 2,
+    statements: [
+      `ALTER TABLE accounts ADD COLUMN watched_folders TEXT NOT NULL DEFAULT '["INBOX"]'`,
+      `CREATE TABLE IF NOT EXISTS purge_jobs (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        filter_id    INTEGER NOT NULL REFERENCES filters(id) ON DELETE CASCADE,
+        account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        folder       TEXT    NOT NULL,
+        status       TEXT    NOT NULL DEFAULT 'running',
+        total_msgs   INTEGER NOT NULL DEFAULT 0,
+        scanned_msgs INTEGER NOT NULL DEFAULT 0,
+        deleted_msgs INTEGER NOT NULL DEFAULT 0,
+        error_msg    TEXT,
+        created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+        updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+      )`,
+    ],
+  },
 ]
 
 export async function runMigrations(): Promise<void> {

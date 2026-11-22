@@ -40,6 +40,17 @@ export const api = {
   updateAccount: (id: number, data: Partial<CreateAccountPayload & { enabled: boolean }>) =>
     req<Account>('PATCH', `/accounts/${id}`, data),
   deleteAccount: (id: number) => req<void>('DELETE', `/accounts/${id}`),
+  getAccountFolders: (id: number) =>
+    req<Array<{ path: string; name: string; specialUse: string | null; flags: string[] }>>(
+      'GET',
+      `/accounts/${id}/folders`
+    ),
+  testAccountFolders: (data: CreateAccountPayload) =>
+    req<Array<{ path: string; name: string; specialUse: string | null; flags: string[] }>>(
+      'POST',
+      '/accounts/test-folders',
+      data
+    ),
 
   // Filters
   getFilters: () => req<Filter[]>('GET', '/filters'),
@@ -48,6 +59,16 @@ export const api = {
   updateFilter: (id: number, data: Partial<CreateFilterPayload & { enabled: boolean }>) =>
     req<Filter>('PATCH', `/filters/${id}`, data),
   deleteFilter: (id: number) => req<void>('DELETE', `/filters/${id}`),
+  purgeFilter: (id: number, options?: { account_id?: number; max_days?: number }) =>
+    req<{
+      mode: 'instant' | 'background'
+      deleted?: number
+      scanned?: number
+      jobIds?: number[]
+      status?: string
+    }>('POST', `/filters/${id}/purge`, options),
+  getFilterPurgeJobs: (id: number) =>
+    req<PurgeJob[]>('GET', `/filters/${id}/purge-jobs`),
 
   // Logs
   getLogs: (params?: { account_id?: number; search?: string; limit?: number; offset?: number }) => {
@@ -75,9 +96,24 @@ export interface Account {
   imap_host: string
   imap_port: number
   imap_secure: boolean
+  watched_folders: string[]
   enabled: boolean
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   status_msg?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PurgeJob {
+  id: number
+  filter_id: number
+  account_id: number
+  folder: string
+  status: 'running' | 'completed' | 'failed'
+  total_msgs: number
+  scanned_msgs: number
+  deleted_msgs: number
+  error_msg?: string
   created_at: string
   updated_at: string
 }
@@ -125,7 +161,7 @@ export interface AccountMailStats {
   inbox_total: number
   scanned: number
   deleted: number
-  not_deleted: number
+  skipped: number
   last_scan_at: string | null
 }
 
@@ -136,6 +172,7 @@ export interface CreateAccountPayload {
   imap_port: number
   imap_secure: boolean
   password: string
+  watched_folders?: string[]
 }
 
 export interface CreateFilterPayload {

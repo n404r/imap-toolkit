@@ -10,11 +10,23 @@ type AccountRow = {
   imap_port: number | bigint
   imap_secure: number | bigint
   password_enc: string
+  watched_folders?: string
   enabled: number | bigint
   status: string
   status_msg: string | null
   created_at: string
   updated_at: string
+}
+
+function parseWatchedFolders(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    } catch {}
+  }
+  return ['INBOX']
 }
 
 function rowToAccount(row: Record<string, unknown>): Account {
@@ -27,6 +39,7 @@ function rowToAccount(row: Record<string, unknown>): Account {
     imap_port: Number(r.imap_port),
     imap_secure: Number(r.imap_secure) === 1,
     password_enc: String(r.password_enc),
+    watched_folders: parseWatchedFolders(r.watched_folders),
     enabled: Number(r.enabled) === 1,
     status: String(r.status) as Account['status'],
     status_msg: r.status_msg ? String(r.status_msg) : undefined,
@@ -55,13 +68,15 @@ export const accountRepo = {
     imap_port: number
     imap_secure: boolean
     password: string
+    watched_folders?: string[]
   }): Promise<Account> {
     const db = getDb()
     const password_enc = encrypt(data.password)
+    const watched_folders_json = JSON.stringify(data.watched_folders && data.watched_folders.length > 0 ? data.watched_folders : ['INBOX'])
     const result = await db.execute({
-      sql: `INSERT INTO accounts (label, email, imap_host, imap_port, imap_secure, password_enc)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-      args: [data.label, data.email, data.imap_host, data.imap_port, data.imap_secure ? 1 : 0, password_enc],
+      sql: `INSERT INTO accounts (label, email, imap_host, imap_port, imap_secure, password_enc, watched_folders)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [data.label, data.email, data.imap_host, data.imap_port, data.imap_secure ? 1 : 0, password_enc, watched_folders_json],
     })
     return (await this.findById(Number(result.lastInsertRowid)))!
   },
@@ -75,6 +90,7 @@ export const accountRepo = {
       imap_port: number
       imap_secure: boolean
       password: string
+      watched_folders: string[]
       enabled: boolean
     }>
   ): Promise<Account | undefined> {
@@ -88,6 +104,10 @@ export const accountRepo = {
     if (data.imap_port !== undefined) { fields.push('imap_port = ?'); values.push(data.imap_port) }
     if (data.imap_secure !== undefined) { fields.push('imap_secure = ?'); values.push(data.imap_secure ? 1 : 0) }
     if (data.password !== undefined) { fields.push('password_enc = ?'); values.push(encrypt(data.password)) }
+    if (data.watched_folders !== undefined) {
+      fields.push('watched_folders = ?')
+      values.push(JSON.stringify(data.watched_folders.length > 0 ? data.watched_folders : ['INBOX']))
+    }
     if (data.enabled !== undefined) { fields.push('enabled = ?'); values.push(data.enabled ? 1 : 0) }
 
     if (fields.length === 0) return this.findById(id)
