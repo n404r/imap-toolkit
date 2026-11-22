@@ -99,6 +99,7 @@ export class FolderWatcher {
   }
 
   highestSeenUid = 0
+  reconnectAt: number | null = null
 
   readonly stats: FolderStats = {
     total: 0,
@@ -123,6 +124,7 @@ export class FolderWatcher {
 
   stop(): void {
     this.state.running = false
+    this.reconnectAt = null
     if (this.state.timer) {
       clearTimeout(this.state.timer)
       this.state.timer = null
@@ -137,8 +139,25 @@ export class FolderWatcher {
     }
   }
 
+  manualReconnect(): void {
+    if (this.state.timer) {
+      clearTimeout(this.state.timer)
+      this.state.timer = null
+    }
+    this.state.reconnectDelay = RECONNECT_DELAY_MS
+    this.reconnectAt = null
+    if (this.state.client) {
+      void this.state.client.logout().catch(() => {})
+      this.state.client = null
+    }
+    this.connect()
+  }
+
   private connect(): void {
     if (!this.state.running) return
+
+    this.reconnectAt = null
+    void accountRepo.updateStatus(this.account.id, 'connecting', `Connecting to ${this.folder}…`)
 
     const password = accountRepo.getPassword(this.account)
     const client = new ImapFlow({
@@ -171,6 +190,8 @@ export class FolderWatcher {
   private async runSession(client: ImapFlow): Promise<void> {
     await client.connect()
     this.state.reconnectDelay = RECONNECT_DELAY_MS
+    this.reconnectAt = null
+    void accountRepo.updateStatus(this.account.id, 'connected')
     this.logger.info(`[IMAP ${this.account.email}:${this.folder}] connected`)
 
     // Discover trash folder path for permanent deletion
@@ -180,13 +201,15 @@ export class FolderWatcher {
     }
 
     // Lock target mailbox and establish baseline UID
+    // NOTE: Mailbox is already selected by getMailboxLock. Do NOT send client.status()
+    // on a selected mailbox as RFC 3501 Section 6.3.10 prohibits it and causes Orange.fr to fail with "NO Command failed".
     let lock = await client.getMailboxLock(this.folder)
     try {
-      const status = await client.status(this.folder, { messages: true, uidNext: true })
-      this.stats.total = status.messages ?? 0
+      const mb = typeof client.mailbox === 'object' && client.mailbox ? client.mailbox : null
+      this.stats.total = typeof mb?.exists === 'number' ? mb.exists : 0
 
-      if (typeof status.uidNext === 'number' && status.uidNext > 1) {
-        this.highestSeenUid = status.uidNext - 1
+      if (typeof mb?.uidNext === 'number' && mb.uidNext > 1) {
+        this.highestSeenUid = mb.uidNext - 1
       } else {
         const searchRes = await client.search({ all: true }, { uid: true })
         if (Array.isArray(searchRes) && searchRes.length > 0) {
@@ -418,16 +441,15 @@ export class FolderWatcher {
 
   private scheduleReconnect(reason?: string): void {
     if (!this.state.running) return
-    const delaySec = Math.round(this.state.reconnectDelay / 1000)
-    const statusMsg = reason
-      ? `${this.folder}: ${reason} (reconnecting in ${delaySec}s…)`
-      : `${this.folder}: Reconnecting in ${delaySec}s…`
+    const delayMs = this.state.reconnectDelay
+    this.reconnectAt = Date.now() + delayMs
+    const cleanReason = reason ? `${this.folder}: ${reason}` : `${this.folder}: Connection closed`
 
-    void accountRepo.updateStatus(this.account.id, 'error', statusMsg)
+    void accountRepo.updateStatus(this.account.id, 'error', cleanReason)
 
     this.state.timer = setTimeout(() => {
       if (this.state.running) this.connect()
-    }, this.state.reconnectDelay)
+    }, delayMs)
 
     this.state.reconnectDelay = Math.min(this.state.reconnectDelay * 2, MAX_RECONNECT_DELAY_MS)
   }
@@ -466,6 +488,24 @@ export class ImapWatcher {
     }
     this.folderWatchers.clear()
     void accountRepo.updateStatus(this.account.id, 'disconnected')
+  }
+
+  manualReconnect(): void {
+    for (const fw of this.folderWatchers.values()) {
+      fw.manualReconnect()
+    }
+  }
+
+  get reconnectAt(): number | null {
+    let earliest: number | null = null
+    for (const fw of this.folderWatchers.values()) {
+      if (fw.reconnectAt) {
+        if (earliest === null || fw.reconnectAt < earliest) {
+          earliest = fw.reconnectAt
+        }
+      }
+    }
+    return earliest
   }
 
   updateFolders(newFolders: string[]): void {
@@ -523,6 +563,7 @@ export class ImapWatcher {
       deleted,
       skipped,
       last_scan_at: latestScan,
+      reconnect_at: this.reconnectAt,
     }
   }
 }
@@ -558,6 +599,11 @@ export class WatcherManager {
   restartWatcher(account: Account): void {
     this.removeWatcher(account.id)
     if (account.enabled) this.addWatcher(account)
+  }
+
+  reconnectWatcher(accountId: number): void {
+    const w = this.watchers.get(accountId)
+    if (w) w.manualReconnect()
   }
 
   stopAll(): void {

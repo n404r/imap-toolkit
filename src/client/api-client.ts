@@ -40,6 +40,7 @@ export const api = {
   updateAccount: (id: number, data: Partial<CreateAccountPayload & { enabled: boolean }>) =>
     req<Account>('PATCH', `/accounts/${id}`, data),
   deleteAccount: (id: number) => req<void>('DELETE', `/accounts/${id}`),
+  reconnectAccount: (id: number) => req<{ ok: boolean }>('POST', `/accounts/${id}/reconnect`),
   getAccountFolders: (id: number) =>
     req<Array<{ path: string; name: string; specialUse: string | null; flags: string[] }>>(
       'GET',
@@ -100,6 +101,7 @@ export interface Account {
   enabled: boolean
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   status_msg?: string
+  reconnect_at?: number | null
   created_at: string
   updated_at: string
 }
@@ -124,6 +126,7 @@ export interface AccountSummary {
   email: string
   status: Account['status']
   status_msg?: string
+  reconnect_at?: number | null
   enabled: boolean
 }
 
@@ -163,6 +166,7 @@ export interface AccountMailStats {
   deleted: number
   skipped: number
   last_scan_at: string | null
+  reconnect_at?: number | null
 }
 
 export interface CreateAccountPayload {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type AccountSummary, type AccountMailStats } from '../api-client'
 import { Skeleton, CardSkeleton } from '../components/Skeleton'
+import { ReconnectTimer } from '../components/ReconnectTimer'
 
 type Stats = { today: number; this_week: number; total: number }
 
@@ -144,16 +145,22 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  {/* Status / error banner */}
+                  {/* Status / error banner with live reconnect countdown */}
                   {a.status === 'error' && (
-                    <div className="rounded bg-red-950/50 border border-red-800/60 px-3 py-2 text-xs text-red-300 flex items-start gap-2">
-                      <span className="flex-shrink-0 mt-0.5">⚠</span>
-                      <span>{a.status_msg ?? 'IMAP connection error'}</span>
+                    <div className="rounded bg-red-950/50 border border-red-800/60 px-3 py-2 text-xs text-red-300">
+                      <ReconnectTimer
+                        reconnectAt={a.reconnect_at}
+                        statusMsg={a.status_msg}
+                        onRetry={async () => {
+                          await api.reconnectAccount(a.id)
+                          await refresh()
+                        }}
+                      />
                     </div>
                   )}
                   {a.status === 'connecting' && (
-                    <div className="rounded bg-yellow-950/40 border border-yellow-800/50 px-3 py-2 text-xs text-yellow-300">
-                      ⟳ Connecting…
+                    <div className="rounded bg-yellow-950/40 border border-yellow-800/50 px-3 py-2 text-xs text-yellow-300 flex items-center justify-between">
+                      <span>⟳ {a.status_msg ?? 'Connecting to IMAP server…'}</span>
                     </div>
                   )}
                   {a.status === 'disconnected' && a.enabled && (

@@ -53,6 +53,8 @@ export interface Account {
   enabled: boolean
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   status_msg?: string
+  /** Epoch timestamp in ms for scheduled reconnect, or null */
+  reconnect_at?: number | null
   created_at: string
   updated_at: string
 }
@@ -107,4 +109,6 @@ export interface AccountMailStats {
   skipped: number
   /** ISO timestamp of last scan, or null if never scanned */
   last_scan_at: string | null
+  /** Epoch timestamp in ms for scheduled reconnect, or null */
+  reconnect_at?: number | null
 }

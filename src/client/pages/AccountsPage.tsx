@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Account, type CreateAccountPayload } from '../api-client'
 import { CardSkeleton } from '../components/Skeleton'
+import { ReconnectTimer } from '../components/ReconnectTimer'
 
 const EMPTY_FORM: CreateAccountPayload = {
   label: '',
@@ -333,17 +334,23 @@ export default function AccountsPage() {
                   </div>
                 </div>
 
-                {/* Status / error banner */}
+                {/* Status / error banner with live countdown */}
                 {a.status === 'error' && (
-                  <div className="mt-2.5 rounded bg-red-950/50 border border-red-800/60 p-2 text-xs text-red-300 break-words flex items-start gap-1.5">
-                    <span className="flex-shrink-0 mt-0.5">⚠</span>
-                    <span>{a.status_msg ?? 'IMAP connection error'}</span>
+                  <div className="mt-2.5 rounded bg-red-950/50 border border-red-800/60 p-2 text-xs text-red-300">
+                    <ReconnectTimer
+                      reconnectAt={a.reconnect_at}
+                      statusMsg={a.status_msg}
+                      onRetry={async () => {
+                        await api.reconnectAccount(a.id)
+                        load()
+                      }}
+                    />
                   </div>
                 )}
                 {a.status === 'connecting' && (
                   <div className="mt-2.5 rounded bg-yellow-950/40 border border-yellow-800/50 p-2 text-xs text-yellow-300 break-words flex items-start gap-1.5">
                     <span className="flex-shrink-0 mt-0.5">⟳</span>
-                    <span>{a.status_msg ?? 'Connecting…'}</span>
+                    <span>{a.status_msg ?? 'Connecting to IMAP server…'}</span>
                   </div>
                 )}
                 {a.status === 'disconnected' && a.enabled && (

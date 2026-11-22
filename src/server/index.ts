@@ -126,7 +126,14 @@ app.get('/api/auth/me', { onRequest: [app.authenticate] }, async () => {
 
 app.get('/api/accounts', { onRequest: [app.authenticate] }, async () => {
   const all = await accountRepo.findAll()
-  return all.map((a) => ({ ...a, password_enc: undefined }))
+  return all.map((a) => {
+    const stats = manager.getStats(a.id)
+    return {
+      ...a,
+      password_enc: undefined,
+      reconnect_at: stats?.reconnect_at ?? null,
+    }
+  })
 })
 
 app.post('/api/accounts', { onRequest: [app.authenticate] }, async (req, reply) => {
@@ -211,6 +218,14 @@ app.delete('/api/accounts/:id', { onRequest: [app.authenticate] }, async (req, r
   manager.removeWatcher(id)
   const ok = await accountRepo.delete(id)
   if (!ok) return reply.code(404).send({ error: 'not found' })
+  return { ok: true }
+})
+
+app.post('/api/accounts/:id/reconnect', { onRequest: [app.authenticate] }, async (req, reply) => {
+  const id = parseInt((req.params as any).id)
+  const account = await accountRepo.findById(id)
+  if (!account) return reply.code(404).send({ error: 'not found' })
+  manager.reconnectWatcher(account.id)
   return { ok: true }
 })
 
@@ -334,14 +349,18 @@ app.get('/api/dashboard', { onRequest: [app.authenticate] }, async () => {
   const [stats, accounts] = await Promise.all([logRepo.stats(), accountRepo.findAll()])
   return {
     stats,
-    accounts: accounts.map((a) => ({
-      id: a.id,
-      label: a.label,
-      email: a.email,
-      status: a.status,
-      status_msg: a.status_msg,
-      enabled: a.enabled,
-    })),
+    accounts: accounts.map((a) => {
+      const mStats = manager.getStats(a.id)
+      return {
+        id: a.id,
+        label: a.label,
+        email: a.email,
+        status: a.status,
+        status_msg: a.status_msg,
+        reconnect_at: mStats?.reconnect_at ?? null,
+        enabled: a.enabled,
+      }
+    }),
   }
 })
 
